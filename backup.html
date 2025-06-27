@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zombie Game</title>
+  <style>
+    /* General page styles */
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+
+    /* Canvas background color */
+    canvas {
+      display: block;
+      background: #000;
+    }
+
+    /* Fullscreen overlay for start/end screens */
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Hide elements with this class */
+    .hidden {
+      display: none;
+    }
+
+    /* Heads-up display for health and time */
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <!-- Start screen -->
+  <div id="startScreen" class="overlay">
+    <h1>Zombie Shooter</h1>
+    <button id="startButton">Start Game</button>
+  </div>
+
+  <!-- End screen -->
+  <div id="endScreen" class="overlay hidden">
+    <h1>Game Over</h1>
+    <button id="restartButton">Restart</button>
+  </div>
+
+  <!-- Health and timer display -->
+  <div id="hud">
+    Health: <span id="healthText"></span> |
+    Time: <span id="timeText">0</span>s
+  </div>
+
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+    /* -------- Game Configuration -------- */
+    const CELL_SIZE = 32;   // reserved for future grid logic
+
+    /* -------- Game State Variables -------- */
+    let canvas, ctx;
+    let walls = [];
+    let zombies = [];
+    let bullets = [];
+
+    let player = { x: 0, y: 0, radius: 10, speed: 2, health: 100 };
+    let keys = { w: false, a: false, s: false, d: false };
+    let mouse = { x: 0, y: 0 };
+    let lastSpawnTime = 0;
+    let gameOver = false;
+    let startTime = 0;
+
+    /* -------- Sprite Images -------- */
+    const images = {};
+    function loadSprites() {
+      images.background = new Image(); images.background.src = 'background.png';
+      images.wall       = new Image(); images.wall.src       = 'wall.png';
+      images.player     = new Image(); images.player.src     = 'player.png';
+      images.zombie     = new Image(); images.zombie.src     = 'zombie.png';
+    }
+
+    /* -------- DOM Elements -------- */
+    const startScreen = document.getElementById('startScreen');
+    const endScreen   = document.getElementById('endScreen');
+    const startButton = document.getElementById('startButton');
+    const restartButton = document.getElementById('restartButton');
+    const healthText  = document.getElementById('healthText');
+    const timeText    = document.getElementById('timeText');
+
+    /* -------- Setup Canvas -------- */
+    function setupCanvas() {
+      canvas = document.getElementById('gameCanvas');
+      ctx = canvas.getContext('2d');
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+
+    /* -------- Input Handlers -------- */
+    function setupInput() {
+      document.addEventListener('keydown',  e => { if(keys.hasOwnProperty(e.key)) keys[e.key] = true;  });
+      document.addEventListener('keyup',    e => { if(keys.hasOwnProperty(e.key)) keys[e.key] = false; });
+      canvas.addEventListener('mousemove', e => {
+        const r = canvas.getBoundingClientRect();
+        mouse.x = e.clientX - r.left;
+        mouse.y = e.clientY - r.top;
+      });
+      canvas.addEventListener('mousedown', spawnBullet);
+    }
+
+    /* -------- Start and Restart -------- */
+    startButton.onclick   = () => { startScreen.classList.add('hidden'); initGame(); };
+    restartButton.onclick = () => { endScreen.classList.add('hidden'); initGame(); };
+
+    /* -------- Initialize Game State -------- */
+    function initGame() {
+      setupCanvas();
+      loadSprites();
+      setupInput();
+
+      walls = [                         // wall rectangles
+        { x:200, y:100, w:400, h:32 },
+        { x:600, y:300, w:32,  h:300 },
+        { x:200, y:300, w:32,  h:300 }
+      ];
+      zombies = [];
+      bullets = [];
+
+      player.x = canvas.width / 2;    // center player
+      player.y = canvas.height / 2;
+      player.health = 100;
+
+      lastSpawnTime = 0;
+      gameOver = false;
+      startTime = Date.now();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    /* -------- End Game -------- */
+    function endGame() {
+      gameOver = true;
+      endScreen.classList.remove('hidden');
+    }
+
+    /* -------- HUD Update -------- */
+    function updateHUD() {
+      healthText.textContent = Math.round(player.health);
+      const secs = Math.floor((Date.now() - startTime) / 1000);
+      timeText.textContent = secs;
+    }
+
+    /* -------- Wall Collision Check -------- */
+    function collidesWall(x, y, radius) {
+      for (let w of walls) {
+        const cx = Math.max(w.x, Math.min(x, w.x + w.w));
+        const cy = Math.max(w.y, Math.min(y, w.y + w.h));
+        const dx = x - cx, dy = y - cy;
+        if (dx*dx + dy*dy < radius*radius) return true;
+      }
+      return false;
+    }
+
+    /* -------- Player Functions -------- */
+    function updatePlayer() {
+      let dx = 0, dy = 0;
+      if (keys.w) dy--;
+      if (keys.s) dy++;
+      if (keys.a) dx--;
+      if (keys.d) dx++;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0) {
+        const nx = player.x + (dx/dist)*player.speed;
+        const ny = player.y + (dy/dist)*player.speed;
+        if (!collidesWall(nx, ny, player.radius)) {
+          player.x = nx;
+          player.y = ny;
+        }
+      }
+    }
+
+    function drawPlayer() {
+      if (images.player.complete) {
+        ctx.drawImage(images.player,
+          player.x-player.radius,
+          player.y-player.radius,
+          player.radius*2,
+          player.radius*2
+        );
+      } else {
+        ctx.fillStyle = 'blue';
+        ctx.beginPath(); ctx.arc(player.x, player.y, player.radius, 0, Math.PI*2); ctx.fill();
+      }
+    }
+
+    /* -------- Zombie Class -------- */
+    class Zombie {
+      constructor(x, y) {
+        this.x = x; this.y = y; this.radius = 10;
+      }
+      update() {
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0) {
+          const nx = this.x + dx/dist;
+          const ny = this.y + dy/dist;
+          if (!collidesWall(nx, ny, this.radius)) {
+            this.x = nx;
+            this.y = ny;
+          }
+        }
+        if (dist < player.radius + this.radius) {
+          player.health -= 0.5;
+        }
+      }
+      draw() {
+        if (images.zombie.complete) {
+          ctx.drawImage(images.zombie,
+            this.x - this.radius,
+            this.y - this.radius,
+            this.radius*2,
+            this.radius*2
+          );
+        } else {
+          ctx.fillStyle = 'green';
+          ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2); ctx.fill();
+        }
+      }
+    }
+    function spawnZombie() {
+      const x = Math.random()*canvas.width;
+      const y = Math.random()*canvas.height;
+      zombies.push(new Zombie(x, y));
+    }
+
+    /* -------- Bullet Functions -------- */
+    function spawnBullet() {
+      const angle = Math.atan2(mouse.y-player.y, mouse.x-player.x);
+      const speed = 5;
+      bullets.push({
+        x: player.x, y: player.y,
+        dx: Math.cos(angle)*speed,
+        dy: Math.sin(angle)*speed,
+        radius:4
+      });
+    }
+    function updateBullets() {
+      bullets = bullets.filter(b => {
+        b.x += b.dx; b.y += b.dy;
+        if (collidesWall(b.x, b.y, b.radius)) return false;
+        for (let i=zombies.length-1; i>=0; i--) {
+          const z = zombies[i];
+          if (Math.hypot(b.x-z.x, b.y-z.y) < b.radius+z.radius) {
+            zombies.splice(i,1);
+            return false;
+          }
+        }
+        return b.x>=0&&b.x<=canvas.width&&b.y>=0&&b.y<=canvas.height;
+      });
+    }
+    function drawBullets() {
+      ctx.fillStyle = 'yellow';
+      for (let b of bullets) {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    /* -------- Draw Walls and Background -------- */
+    function drawBackground() {
+      if (images.background.complete) {
+        ctx.drawImage(images.background, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      }
+    }
+    function drawWalls() {
+      if (images.wall.complete) {
+        for (let w of walls) {
+          ctx.drawImage(images.wall, w.x, w.y, w.w, w.h);
+        }
+      } else {
+        ctx.fillStyle = '#444';
+        for (let w of walls) ctx.fillRect(w.x, w.y, w.w, w.h);
+      }
+    }
+
+    /* -------- Main Game Loop -------- */
+    function gameLoop(ts) {
+      if (gameOver) { endGame(); return; }
+      if (ts - lastSpawnTime > 2000) { spawnZombie(); lastSpawnTime = ts; }
+      updatePlayer(); zombies.forEach(z=>z.update()); updateBullets(); updateHUD();
+      drawBackground(); drawWalls(); drawPlayer(); zombies.forEach(z=>z.draw()); drawBullets();
+      requestAnimationFrame(gameLoop);
+    }
+
+    /* -------- Start the Game -------- */
+    setupCanvas();
+    // Wait for user to click "Start Game"
+  </script>
+</body>
+</html>

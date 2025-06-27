@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zombie shooter</title>
+  <style>
+    /* General page styles */
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+
+    /* Canvas background color */
+    canvas {
+      display: block;
+      background: #000;
+    }
+
+    /* Fullscreen overlay for start/end screens */
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #d52a0c;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Hide elements with this class */
+    .hidden {
+      display: none;
+    }
+
+    /* Heads-up display for health and time */
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #f89999;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Start screen -->
+  <div id="startScreen" class="overlay">
+    <h1>Zombie Shooter</h1>
+    <button id="startButton">Start Game</button>
+    <button id="shotgun" onclick="selectWeapon(2)">Shotgun</button>
+    <button id="assaultRifle" onclick="selectWeapon(1)">Assault Rifle</button>
+    <button id="assaultRifle" onclick="selectWeapon(3)">Tank</button>
+  </div>
+
+  <!-- End screen -->
+  <div id="endScreen" class="overlay hidden">
+    <h1>Game Over</h1>
+    <button id="restartButton">Restart</button>
+  </div>
+
+  <!-- Health and timer display -->
+  <div id="hud">
+    Health: <span id="healthText"></span> |
+    Time: <span id="timeText">0</span>s |
+    Shots Fired: <span id="shotsText">0</span> |
+    Zombie Count: <span id="zombieText">0</span> |
+    Ammo Count: <span id="ammoText">0</span>
+  </div>
+
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+    /* -------- Game Configuration -------- */
+    const CELL_SIZE = 32;   // reserved for future grid logic
+
+    /* -------- Game State Variables -------- */
+
+    /* -------- State -------- */
+    let canvas, ctx;
+    let walls = [];
+    let grid = [];
+    let zombies = [];
+    let bullets = [];
+    let player = { x: 0, y: 0, radius: 10, speed: 2, health: 100 };
+    var CooldownTime = 5000
+    var Ammo = 7
+    var ShotsFired = 0
+    var ZombieCount = 0
+    var GunType = 1;
+    var IsReloading = false
+    let keys = { w: false, a: false, s: false, d: false };
+    let mouse = { x: 0, y: 0 };
+    let lastSpawn = 0, gameOver = false, startTime = 0;
+
+    /* -------- Sprite Images -------- */
+    const images = {};
+    function loadSprites() {
+      images.background = new Image(); images.background.src = 'background.png';
+      images.wall = new Image(); images.wall.src = 'wall.png';
+      images.player = new Image(); images.player.src = 'player.png';
+      images.zombie = new Image(); images.zombie.src = 'zombie.png';
+    }
+
+    /* -------- DOM Elements -------- */
+    const startScreen = document.getElementById('startScreen');
+    const endScreen = document.getElementById('endScreen');
+    const startButton = document.getElementById('startButton');
+    const restartButton = document.getElementById('restartButton');
+    const healthText = document.getElementById('healthText');
+    const timeText = document.getElementById('timeText');
+    const shotsText = document.getElementById('shotsText');
+    const zombieText = document.getElementById('zombieText');
+    const ammoText = document.getElementById('ammoText');
+
+
+    /* -------- Setup Canvas -------- */
+    function setupCanvas() {
+      canvas = document.getElementById('gameCanvas');
+      ctx = canvas.getContext('2d');
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+
+    /* -------- Input Handlers -------- */
+    function setupInput() {
+      document.addEventListener('keydown', e => { if (keys.hasOwnProperty(e.key)) keys[e.key] = true; });
+      document.addEventListener('keyup', e => { if (keys.hasOwnProperty(e.key)) keys[e.key] = false; });
+      canvas.addEventListener('mousemove', e => {
+        const r = canvas.getBoundingClientRect();
+        mouse.x = e.clientX - r.left;
+        mouse.y = e.clientY - r.top;
+      });
+      canvas.addEventListener('mousedown', spawnBullet);
+    }
+
+    /* -------- Start and Restart -------- */
+    startButton.onclick = () => { startScreen.classList.add('hidden'); initGame(); };
+    restartButton.onclick = () => { endScreen.classList.add('hidden'); initGame(); };
+
+    /* -------- Initialize Game State -------- */
+    function initGame() {
+      setupCanvas();
+      loadSprites();
+      setupInput();
+
+      let bottomY = window.innerHeight;
+
+      walls = [                         // wall rectangles
+        { x: 0, y: bottomY - 32, w: 940, h: 32 },
+        { x: 925, y: bottomY - 500, w: 32, h: 500 },
+        { x: 143, y: 1130, w: 547, h: 32 },
+        { x: 790, y: 450, w: 32, h: 712 },
+        { x: 925, y: 780, w: 140, h: 32 },
+        { x: 925, y: 650, w: 1015, h: 32 },
+        { x: 1857, y: 680, w: 32, h: 650 },
+        { x: 1070, y: 1275, w: 800, h: 32 },
+        { x: 1450, y: 680, w: 32, h: 450 },
+        { x: 1065, y: 780, w: 32, h: 600 },
+        { x: 925, y: 250, w: 32, h: 400 },
+        { x: 925, y: 450, w: 1000, h: 32 },
+        { x: 1857, y: 0, w: 32, h: 450 },
+        { x: 925, y: 0, w: 950, h: 32 },
+        { x: 925, y: 0, w: 32, h: 100 },
+        { x: 0, y: 0, w: 300, h: 32 },
+        { x: 0, y: 0, w: 32, h: 1300 },
+        { x: 300, y: 0, w: 32, h: 200 },
+        { x: 0, y: 168, w: 100, h: 32 },
+        { x: 235, y: 168, w: 80, h: 32 },
+        { x: 300, y: 100, w: 657, h: 32 },
+        { x: 300, y: 300, w: 657, h: 32 },
+        { x: 0, y: 450, w: 800, h: 32 },
+      ];
+
+      buildGrid();
+      zombies = [];
+      bullets = [];
+      player.x = 1700;
+      player.y = 250;
+      player.health = 100;
+      lastSpawn = 0; gameOver = false; startTime = Date.now();
+      requestAnimationFrame(gameLoop);
+    }
+
+
+    function selectWeapon(index) {
+      GunType = index;
+    }
+
+
+    function endGame() {
+      gameOver = true;
+      endScreen.classList.remove('hidden');
+    }
+
+    /* -------- Grid for A* -------- */
+    function buildGrid() {
+      const cols = Math.floor(canvas.width / CELL_SIZE);
+      const rows = Math.floor(canvas.height / CELL_SIZE);
+      grid = [];
+      for (let y = 0; y < rows; y++) {
+        let row = [];
+        for (let x = 0; x < cols; x++) {
+          row.push(true);
+        }
+        grid.push(row);
+      }
+      // mark walls as blocked
+      walls.forEach(w => {
+        let sx = Math.floor(w.x / CELL_SIZE);
+        let sy = Math.floor(w.y / CELL_SIZE);
+        let ex = Math.ceil((w.x + w.w) / CELL_SIZE);
+        let ey = Math.ceil((w.y + w.h) / CELL_SIZE);
+        for (let yy = sy; yy < ey; yy++) {
+          for (let xx = sx; xx < ex; xx++) {
+            if (grid[yy] && grid[yy][xx]) grid[yy][xx] = false;
+          }
+        }
+      });
+    }
+
+    /* -------- A* Functions -------- */
+    function findPath(sx, sy, tx, ty) {
+      let open = [{ x: sx, y: sy, g: 0, f: heuristic(sx, sy, tx, ty), parent: null }];
+      let closed = new Set();
+      function key(n) { return n.x + ',' + n.y; }
+      while (open.length) {
+        open.sort((a, b) => a.f - b.f);
+        let current = open.shift();
+        if (current.x === tx && current.y === ty) { return buildPath(current); }
+        closed.add(key(current));
+        neighbors(current).forEach(n => {
+          if (n.x < 0 || n.y < 0 || n.y >= grid.length || n.x >= grid[0].length) return;
+          if ((!grid[n.y][n.x]) && (n.x !== tx || n.y !== ty)) return;
+          let k = n.x + ',' + n.y;
+          if (closed.has(k)) return;
+          let g2 = current.g + 1;
+          let f2 = g2 + heuristic(n.x, n.y, tx, ty);
+          let exist = open.find(o => o.x === n.x && o.y === n.y);
+          if (exist) { if (g2 < exist.g) { exist.g = g2; exist.f = f2; exist.parent = current; } }
+          else open.push({ x: n.x, y: n.y, g: g2, f: f2, parent: current });
+        });
+      }
+      return [];
+    }
+    function heuristic(x1, y1, x2, y2) { return Math.abs(x1 - x2) + Math.abs(y1 - y2); }
+    function neighbors(n) { return [{ x: n.x + 1, y: n.y }, { x: n.x - 1, y: n.y }, { x: n.x, y: n.y + 1 }, { x: n.x, y: n.y - 1 }]; }
+    function buildPath(node) { let path = []; while (node) { path.push([node.x, node.y]); node = node.parent; } return path.reverse(); }
+
+    /* -------- Collisions -------- */
+    function collidesWall(x, y, radius) {
+      for (let w of walls) {
+        let cx = Math.max(w.x, Math.min(x, w.x + w.w));
+        let cy = Math.max(w.y, Math.min(y, w.y + w.h));
+        let dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy < radius * radius) return true;
+      }
+      return false;
+    }
+
+    /* -------- Player -------- */
+    function updatePlayer() {
+      let dx = 0, dy = 0;
+      if (keys.w) dy--;
+      if (keys.s) dy++;
+      if (keys.a) dx--;
+      if (keys.d) dx++;
+      let dist = Math.hypot(dx, dy);
+      if (dist > 0) {
+        let nx = player.x + (dx / dist) * player.speed;
+        let ny = player.y + (dy / dist) * player.speed;
+        if (!collidesWall(nx, ny, player.radius)) {
+          player.x = nx; player.y = ny;
+        }
+      }
+      if (player.health < 0 && !gameOver) {
+        endGame()
+      }
+
+      // let angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+      // dx: Math.cos(angle) * speed, dy: Math.sin(angle) * speed
+
+
+
+    }
+    function drawPlayer() {
+      player.rotation = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+
+
+      if (images.player.complete) {
+        ctx.save();
+        ctx.translate(player.x, player.y)
+        ctx.rotate(player.rotation)
+        ctx.drawImage(images.player, -player.radius - 15, -player.radius - 27, player.radius * 6, player.radius * 6);
+        ctx.restore();
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, 40, 0, 2 * Math.PI);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = 'blue'; ctx.beginPath(); ctx.arc(player.x, player.y, player.radius, 0, 2 * Math.PI); ctx.fill();
+      }
+    }
+
+    /* -------- Zombie -------- */
+    class Zombie {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 10;
+        this.path = [];
+      }
+      update() {
+        // A* pathfinding towards player
+        const sx = Math.floor(this.x / CELL_SIZE);
+        const sy = Math.floor(this.y / CELL_SIZE);
+        const tx = Math.floor(player.x / CELL_SIZE);
+        const ty = Math.floor(player.y / CELL_SIZE);
+        this.path = findPath(sx, sy, tx, ty);
+        const rotation = Math.atan2(sx - ty, sx - ty);
+
+
+        // Move to next node in path
+        if (this.path.length > 1) {
+          const [nx, ny] = this.path[1];
+          const targetX = nx * CELL_SIZE + CELL_SIZE / 2;
+          const targetY = ny * CELL_SIZE + CELL_SIZE / 2;
+          const dx = targetX - this.x;
+          const dy = targetY - this.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 0) {
+            this.x += dx / dist;
+            this.y += dy / dist;
+          }
+        }
+        // Damage player if close
+        const d2 = Math.hypot(this.x - player.x, this.y - player.y);
+        if (d2 < player.radius + this.radius + 1) {
+          player.health -= 1;
+        }
+      }
+      draw() {
+        if (images.zombie.complete) {
+          ctx.drawImage(
+            images.zombie,
+            this.x - this.radius - 38,
+            this.y - this.radius - 22,
+            this.radius * 6,
+            this.radius * 6
+          );
+          // ctx.beginPath();f
+          // ctx.arc(this.x - this.radius - 10, this.y - this.radius + 10, 40, 0, 2 * Math.PI);
+          // ctx.stroke();
+        } else {
+          ctx.fillStyle = 'green';
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+      }
+
+    }
+    function spawnZombie() {
+
+      let spawnPoints = [
+        { x: 100, y: 500 },
+        { x: 1800, y: 700 },
+        { x: 100, y: 100 },
+
+      ];
+
+      if (ZombieCount > 64) {
+        return;
+      }
+
+      zombieText.textContent = ZombieCount = ZombieCount + 1
+      let randomSpawnPoint = Math.floor(Math.random() * 3)
+
+      zombies.push(new Zombie(spawnPoints[randomSpawnPoint].x, spawnPoints[randomSpawnPoint].y));
+    }
+
+    /* -------- Bullets -------- */
+    function spawnBullet() {
+
+       if (Ammo == 0 && !IsReloading) {
+        IsReloading = true;
+        setTimeout(function() {
+          IsReloading = false;
+          Ammo = 7;
+        }, CooldownTime) 
+        return
+      }
+
+      if (IsReloading) {
+        return;
+      }
+
+
+
+      let angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+      let speed = 15;
+
+      if (GunType === 1) {
+        bullets.push({ x: player.x, y: player.y, dx: Math.cos(angle) * speed, dy: Math.sin(angle) * speed, radius: 4 });
+      }
+
+      if (GunType === 2) {
+        bullets.push({ x: player.x, y: player.y, dx: Math.cos(angle +.1) * speed, dy: Math.sin(angle +.1) * speed, radius: 4 });
+        bullets.push({ x: player.x, y: player.y, dx: Math.cos(angle) * speed, dy: Math.sin(angle) * speed, radius: 4 });
+        bullets.push({ x: player.x, y: player.y, dx: Math.cos(angle -.1) * speed, dy: Math.sin(angle -.1) * speed, radius: 4 });
+      }
+
+      if (GunType === 3) {
+        bullets.push({ x: player.x, y: player.y, dx: Math.cos(angle) * speed, dy: Math.sin(angle) * speed, radius: 15 });
+      }
+
+
+      
+      // when bullets fired, ammo count -1 //
+      shotsText.textContent = ShotsFired = ShotsFired + 1
+      ammoText.textContent = Ammo = Ammo - 1
+     
+    }
+
+    function updateBullets() {
+      bullets = bullets.filter(b => {
+        b.x += b.dx; b.y += b.dy;
+        if (collidesWall(b.x, b.y, b.radius)) return false;
+        for (let i = zombies.length - 1; i >= 0; i--) {
+          let z = zombies[i];
+          if (Math.hypot(b.x - z.x, b.y - z.y) < b.radius + z.radius) {
+            zombies.splice(i, 1);
+            zombieText.textContent = ZombieCount = ZombieCount - 1
+            if (GunType === 3) {return true}
+            return false;
+          }
+        }
+        return b.x >= 0 && b.x <= canvas.width && b.y >= 0 && b.y <= canvas.height;
+      });
+
+    }
+    function drawBullets() {
+      ctx.fillStyle = 'yellow';
+      bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 1, 2 * Math.PI); ctx.fill(); });
+
+    }
+
+
+    /* -------- Background & Walls -------- */
+    function drawBackground() {
+      if (images.background.complete) ctx.drawImage(images.background, 0, 0, canvas.width, canvas.height);
+      else ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    function drawWalls() {
+      if (images.wall.complete) {
+        walls.forEach(w => ctx.drawImage(images.wall, w.x, w.y, w.w, w.h));
+      } else {
+        ctx.fillStyle = '#444'; walls.forEach(w => ctx.fillRect(w.x, w.y, w.w, w.h));
+      }
+    }
+
+    /* -------- HUD -------- */
+    function updateHUD() {
+      healthText.textContent = Math.round(player.health);
+      timeText.textContent = Math.floor((Date.now() - startTime) / 1000);
+    }
+
+    /* -------- Main Loop -------- */
+    function gameLoop(ts) {
+      if (gameOver) { endGame(); return; }
+      if (ts - lastSpawn > 850) { spawnZombie(); lastSpawn = ts; }
+      updatePlayer(); zombies.forEach(z => z.update()); updateBullets(); updateHUD();
+      drawBackground(); drawWalls(); drawPlayer(); zombies.forEach(z => z.draw()); drawBullets();
+      requestAnimationFrame(gameLoop);
+    }
+
+    /* -------- Start -------- */
+    setupCanvas();
+  </script>
+</body>
+
+</html>
